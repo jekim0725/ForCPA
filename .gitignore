@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# API keys and environment variables
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Test and tool caches
+.pytest_cache/
+.mypy_cache/
+
+# Editor
+.vscode/
+.idea/
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Private or real client data
+private-data/
