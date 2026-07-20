@@ -7,6 +7,7 @@ venv/
 # API keys and environment variables
 .env
 .env.*
+!.env.example
 
 # Jupyter
 .ipynb_checkpoints/
@@ -25,3 +26,4 @@ Thumbs.db
 
 # Private or real client data
 private-data/
+data/cache/
