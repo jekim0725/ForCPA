@@ -122,6 +122,69 @@ class ApiClientSecurityTests(unittest.TestCase):
         self.assertIn("HTTP 403", str(caught.exception))
         self.assertNotIn("top-secret", str(caught.exception))
 
+    def test_proxy_receives_allowlisted_request_without_dart_api_key(self) -> None:
+        class ProxySession:
+            headers: dict[str, str] = {}
+            captured: dict[str, object] = {}
+
+            def post(self, url, **kwargs):
+                self.captured = {"url": url, **kwargs}
+                response = requests.Response()
+                response.status_code = 200
+                response._content = b'{"status":"000","list":[]}'
+                response.headers["Content-Type"] = "application/json"
+                return response
+
+        session = ProxySession()
+        client = DartClient(
+            proxy_url="https://example.vercel.app/api/dart_proxy",
+            proxy_token="proxy-secret",
+            session=session,
+            max_retries=0,
+        )
+        client.list_annual_reports("00126380", "20250101", "20251231")
+
+        self.assertEqual(session.captured["url"], "https://example.vercel.app/api/dart_proxy")
+        payload = session.captured["json"]
+        assert isinstance(payload, dict)
+        self.assertEqual(payload["target"], "opendart")
+        self.assertEqual(payload["path"], "/api/list.json")
+        self.assertNotIn("crtfc_key", payload["params"])
+        self.assertEqual(
+            session.captured["headers"],
+            {"Authorization": "Bearer proxy-secret"},
+        )
+
+    def test_proxy_configuration_requires_url_and_token_together(self) -> None:
+        with self.assertRaises(ValueError):
+            DartClient(proxy_url="https://example.vercel.app/api/dart_proxy")
+
+
+class ProxyAllowlistTests(unittest.TestCase):
+    def test_injects_server_side_api_key_for_allowed_endpoint(self) -> None:
+        from api.dart_proxy import prepare_upstream
+
+        url, params = prepare_upstream(
+            {
+                "target": "opendart",
+                "path": "/api/list.json",
+                "params": {"corp_code": "00126380", "crtfc_key": "attacker-value"},
+            },
+            "server-side-key",
+        )
+
+        self.assertEqual(url, "https://opendart.fss.or.kr/api/list.json")
+        self.assertEqual(params["crtfc_key"], "server-side-key")
+
+    def test_rejects_arbitrary_proxy_destination(self) -> None:
+        from api.dart_proxy import prepare_upstream
+
+        with self.assertRaises(ValueError):
+            prepare_upstream(
+                {"target": "external", "path": "https://example.com", "params": {}},
+                "server-side-key",
+            )
+
 
 class CompanyDirectoryTests(unittest.TestCase):
     def test_searches_listed_companies_and_preserves_leading_zero(self) -> None:

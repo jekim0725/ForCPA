@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 import requests
@@ -22,19 +23,56 @@ class DartClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         *,
+        proxy_url: str = "",
+        proxy_token: str = "",
         timeout: tuple[float, float] = (5.0, 30.0),
         max_retries: int = 2,
         session: requests.Session | None = None,
     ) -> None:
-        if not api_key.strip():
-            raise ValueError("DART_API_KEY가 필요합니다.")
+        has_proxy = bool(proxy_url.strip() and proxy_token.strip())
+        if not api_key.strip() and not has_proxy:
+            raise ValueError("DART_API_KEY 또는 DART 중계 서버 설정이 필요합니다.")
+        if bool(proxy_url.strip()) != bool(proxy_token.strip()):
+            raise ValueError("DART_PROXY_URL과 DART_PROXY_TOKEN을 함께 설정해야 합니다.")
         self._api_key = api_key.strip()
+        self._proxy_url = proxy_url.strip().rstrip("/")
+        self._proxy_token = proxy_token.strip()
         self.timeout = timeout
         self.max_retries = max_retries
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": "forcpa-dart-kam/1.0"})
+
+    @property
+    def uses_proxy(self) -> bool:
+        return bool(self._proxy_url)
+
+    @classmethod
+    def _proxy_payload(cls, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        parsed = urlsplit(url)
+        targets = {
+            "opendart.fss.or.kr": "opendart",
+            "dart.fss.or.kr": "dart",
+        }
+        target = targets.get(parsed.hostname or "")
+        if parsed.scheme != "https" or target is None:
+            raise ValueError("허용되지 않은 DART 중계 대상입니다.")
+        return {
+            "target": target,
+            "path": parsed.path,
+            "params": params,
+        }
+
+    def _perform_request(self, url: str, params: dict[str, Any]) -> requests.Response:
+        if not self.uses_proxy:
+            return self.session.get(url, params=params, timeout=self.timeout)
+        return self.session.post(
+            self._proxy_url,
+            json=self._proxy_payload(url, params),
+            headers={"Authorization": f"Bearer {self._proxy_token}"},
+            timeout=self.timeout,
+        )
 
     @staticmethod
     def _safe_network_error_detail(error: Exception | None) -> str:
@@ -60,11 +98,7 @@ class DartClient:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                response = self.session.get(
-                    url,
-                    params=params,
-                    timeout=self.timeout,
-                )
+                response = self._perform_request(url, params)
                 if response.status_code >= 500 and attempt < self.max_retries:
                     time.sleep(0.5 * (2**attempt))
                     continue
@@ -80,7 +114,9 @@ class DartClient:
         raise DartApiError("network_error", f"OpenDART 네트워크 요청 실패: {detail}") from last_error
 
     def _request(self, endpoint: str, params: dict[str, Any]) -> requests.Response:
-        safe_params = {**params, "crtfc_key": self._api_key}
+        safe_params = dict(params)
+        if not self.uses_proxy:
+            safe_params["crtfc_key"] = self._api_key
         return self._send(f"{self.BASE_URL}/{endpoint}", safe_params)
 
     def _get_json(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
