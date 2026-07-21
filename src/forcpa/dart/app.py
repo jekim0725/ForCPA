@@ -114,9 +114,6 @@ def _render_result(result: KamResult) -> None:
                 if item.source_locator:
                     st.caption(f"원문 위치: {item.source_locator}")
 
-        with st.expander("KAM_RESULT 테이블 보기"):
-            st.dataframe(result.to_rows(), use_container_width=True, hide_index=True)
-
 
 def main() -> None:
     st.set_page_config(page_title="DART KAM 조회", page_icon="🔎", layout="wide")
