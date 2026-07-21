@@ -33,6 +33,19 @@ Copy-Item .env.example .env
 streamlit run src\forcpa\dart\app.py
 ```
 
+#### Streamlit Community Cloud 배포
+
+- 저장소: `jekim0725/ForCPA`
+- 브랜치: `main`
+- 실행 파일: `src/forcpa/dart/app.py`
+- Python: `3.11`
+
+배포 화면의 **Advanced settings → Secrets**에 아래 형식으로 인증키를 등록합니다. 실제 인증키나 `.env` 파일은 GitHub에 커밋하지 않습니다.
+
+```toml
+DART_API_KEY = "발급받은_인증키"
+```
+
 - 간단 설계: [`docs/dart-kam-mvp-simple.md`](docs/dart-kam-mvp-simple.md)
 - 상세 PRD: [`docs/dart-kam-prd.md`](docs/dart-kam-prd.md)
 
