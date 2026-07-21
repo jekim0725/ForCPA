@@ -103,6 +103,24 @@ class ApiClientSecurityTests(unittest.TestCase):
             client.list_annual_reports("00126380", "20250101", "20251231")
 
         self.assertNotIn("top-secret", str(caught.exception))
+        self.assertIn("연결 실패", str(caught.exception))
+
+    def test_http_error_reports_only_status_code(self) -> None:
+        class ForbiddenSession:
+            headers: dict[str, str] = {}
+
+            def get(self, *args, **kwargs):
+                response = requests.Response()
+                response.status_code = 403
+                response.url = "https://example.test?crtfc_key=top-secret"
+                return response
+
+        client = DartClient("top-secret", session=ForbiddenSession(), max_retries=0)
+        with self.assertRaises(DartApiError) as caught:
+            client.list_annual_reports("00126380", "20250101", "20251231")
+
+        self.assertIn("HTTP 403", str(caught.exception))
+        self.assertNotIn("top-secret", str(caught.exception))
 
 
 class CompanyDirectoryTests(unittest.TestCase):
