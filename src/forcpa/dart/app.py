@@ -44,8 +44,8 @@ CACHE_ROOT = PROJECT_ROOT / "data" / "cache" / "dart"
 
 
 @st.cache_resource(show_spinner=False)
-def build_service(api_key: str) -> KamService:
-    client = DartClient(api_key)
+def build_service(api_key: str, proxy_url: str = "", proxy_token: str = "") -> KamService:
+    client = DartClient(api_key, proxy_url=proxy_url, proxy_token=proxy_token)
     return KamService(
         client=client,
         company_directory=CompanyDirectory(client, CACHE_ROOT / "corp_codes.xml"),
@@ -126,12 +126,23 @@ def main() -> None:
     st.caption("최신 사업보고서의 감사인과 핵심감사사항 원문을 확인합니다.")
 
     api_key = os.getenv("DART_API_KEY", "").strip()
-    if not api_key:
-        st.error("DART_API_KEY가 설정되지 않았습니다.")
-        st.code("# 프로젝트 루트의 .env 파일\nDART_API_KEY=발급받은_인증키")
+    proxy_url = os.getenv("DART_PROXY_URL", "").strip()
+    proxy_token = os.getenv("DART_PROXY_TOKEN", "").strip()
+    proxy_configured = bool(proxy_url and proxy_token)
+    if bool(proxy_url) != bool(proxy_token):
+        st.error("DART_PROXY_URL과 DART_PROXY_TOKEN을 함께 설정해 주세요.")
+        st.stop()
+    if not api_key and not proxy_configured:
+        st.error("DART_API_KEY 또는 DART 중계 서버가 설정되지 않았습니다.")
+        st.code(
+            "# 로컬 직접 연결\nDART_API_KEY=발급받은_인증키\n\n"
+            "# Streamlit Cloud 중계 연결\n"
+            "DART_PROXY_URL=https://내프로젝트.vercel.app/api/dart_proxy\n"
+            "DART_PROXY_TOKEN=임의의_긴_비밀문자열"
+        )
         st.stop()
 
-    service = build_service(api_key)
+    service = build_service(api_key, proxy_url, proxy_token)
     query = st.text_input(
         "기업명 또는 종목코드",
         placeholder="예: 삼성전자 또는 005930",

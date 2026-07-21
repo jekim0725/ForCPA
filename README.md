@@ -49,6 +49,26 @@ DART_API_KEY = "발급받은_인증키"
 - 간단 설계: [`docs/dart-kam-mvp-simple.md`](docs/dart-kam-mvp-simple.md)
 - 상세 PRD: [`docs/dart-kam-prd.md`](docs/dart-kam-prd.md)
 
+#### Vercel 서울 중계 서버 연결
+
+Streamlit Cloud에서 DART 접속이 시간 초과될 때는 `api/dart_proxy.py`를 Vercel 서울 리전에 배포합니다.
+Vercel 프로젝트 환경변수에는 다음 두 값을 등록합니다.
+
+```text
+DART_API_KEY=OpenDART에서 발급받은 인증키
+DART_PROXY_TOKEN=직접 생성한 긴 임의 문자열
+```
+
+그 다음 Streamlit Community Cloud의 **Settings → Secrets**를 아래처럼 변경합니다.
+
+```toml
+DART_PROXY_URL = "https://Vercel프로젝트주소.vercel.app/api/dart_proxy"
+DART_PROXY_TOKEN = "Vercel에 등록한 것과 같은 임의 문자열"
+```
+
+이 구성에서는 DART 인증키가 Vercel에만 저장되고, Streamlit 앱은 인증된 중계 요청만 보냅니다.
+중계 함수는 코드에 허용된 OpenDART API와 DART 뷰어 경로 이외의 주소에는 접근할 수 없습니다.
+
 ## 학습 기록
 
 학습 내용, 구현 과정, 오류와 해결 방법을 날짜별로 기록합니다.
