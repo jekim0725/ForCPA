@@ -60,7 +60,7 @@ def _api_error_message(error: DartApiError) -> str:
         "011": "현재 사용할 수 없는 인증키입니다. OpenDART에서 키 상태를 확인해 주세요.",
         "013": "조건에 맞는 공시가 없습니다.",
         "020": "OpenDART 요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.",
-        "network_error": "네트워크 연결을 확인한 뒤 다시 시도해 주세요.",
+        "network_error": f"{error.message}. 잠시 후 다시 시도해 주세요.",
     }
     return actions.get(error.code, f"OpenDART 요청에 실패했습니다. 오류 코드: {error.code}")
 

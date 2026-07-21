@@ -36,6 +36,26 @@ class DartClient:
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": "forcpa-dart-kam/1.0"})
 
+    @staticmethod
+    def _safe_network_error_detail(error: Exception | None) -> str:
+        """인증키나 요청 URL을 노출하지 않고 실패 종류만 반환한다."""
+        if isinstance(error, requests.exceptions.HTTPError):
+            response = error.response
+            if response is not None:
+                return f"HTTP {response.status_code}"
+            return "HTTP 응답 오류"
+        if isinstance(error, requests.exceptions.ConnectTimeout):
+            return "연결 시간 초과"
+        if isinstance(error, requests.exceptions.ReadTimeout):
+            return "응답 시간 초과"
+        if isinstance(error, requests.exceptions.SSLError):
+            return "SSL 연결 오류"
+        if isinstance(error, requests.exceptions.ProxyError):
+            return "프록시 연결 오류"
+        if isinstance(error, requests.exceptions.ConnectionError):
+            return "연결 실패"
+        return "알 수 없는 연결 오류"
+
     def _send(self, url: str, params: dict[str, Any]) -> requests.Response:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
@@ -56,7 +76,8 @@ class DartClient:
                     break
                 time.sleep(0.5 * (2**attempt))
         # requests 예외에는 쿼리 문자열의 인증키가 포함될 수 있으므로 원문을 노출하지 않는다.
-        raise DartApiError("network_error", "네트워크 요청에 실패했습니다.") from last_error
+        detail = self._safe_network_error_detail(last_error)
+        raise DartApiError("network_error", f"OpenDART 네트워크 요청 실패: {detail}") from last_error
 
     def _request(self, endpoint: str, params: dict[str, Any]) -> requests.Response:
         safe_params = {**params, "crtfc_key": self._api_key}
