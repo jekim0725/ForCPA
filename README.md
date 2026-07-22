@@ -9,8 +9,9 @@ CPA 업무에 Python과 AI를 활용하는 방법을 학습하고, 실제로 사
 - 감사인(회계법인)
 - 보고기간과 DART 접수번호
 - 연결·별도 감사보고서 구분
-- 핵심감사사항 제목과 선정 이유
-- 감사인의 대응 내용
+- 핵심감사사항 제목과 초보자용 한눈 요약
+- 왜 중요한지와 감사인이 무엇을 했는지에 대한 쉬운 설명
+- 핵심 회계용어 풀이
 - 해당 DART 감사보고서 원문 링크
 
 ### 바로 사용하기
@@ -20,7 +21,7 @@ CPA 업무에 Python과 AI를 활용하는 방법을 학습하고, 실제로 사
 1. 기업명 또는 6자리 종목코드를 입력합니다.
 2. **기업 찾기**를 누르고 조회할 기업을 확인합니다.
 3. **최신 KAM 조회**를 누릅니다.
-4. 감사인과 핵심감사사항 원문을 확인합니다.
+4. 감사인과 핵심감사사항의 쉬운 설명을 읽습니다. 정확한 문구가 필요할 때만 **원문 보기**를 엽니다.
 
 ## 동작 원리
 
@@ -28,13 +29,11 @@ CPA 업무에 Python과 AI를 활용하는 방법을 학습하고, 실제로 사
 사용자 브라우저
     ↓
 Streamlit Community Cloud (조회 화면과 문서 분석)
-    ↓  DART_PROXY_TOKEN으로 인증
-Vercel 서울 리전 (DART 요청 중계)
-    ↓  DART_API_KEY로 호출
-OpenDART API / DART 감사보고서
+    ├─ DART_PROXY_TOKEN → Vercel 서울 리전 → OpenDART API / DART 감사보고서
+    └─ GEMINI_API_KEY → Gemini API (초보자용 설명 생성)
 ```
 
-Streamlit Community Cloud에서 DART 직접 연결이 시간 초과되어, DART 요청만 Vercel 서울 리전이 대신 수행합니다. 친구나 일반 사용자는 인증키와 중계 토큰을 입력할 필요가 없습니다.
+Streamlit Community Cloud에서 DART 직접 연결이 시간 초과되어, DART 요청만 Vercel 서울 리전이 대신 수행합니다. Gemini 호출은 Streamlit 서버가 직접 수행합니다. 친구나 일반 사용자는 인증키와 중계 토큰을 입력할 필요가 없습니다.
 
 ## 주요 파일
 
@@ -42,6 +41,7 @@ Streamlit Community Cloud에서 DART 직접 연결이 시간 초과되어, DART 
 - `src/forcpa/dart/api_client.py`: OpenDART 직접·중계 요청 처리
 - `src/forcpa/dart/viewer.py`: 감사보고서 첨부와 본문 구간 선택
 - `src/forcpa/dart/document_parser.py`: 감사인과 핵심감사사항 추출
+- `src/forcpa/dart/ai_summary.py`: Gemini 쉬운 설명 생성, 응답 검증, 요약 캐시
 - `api/dart_proxy.py`: Vercel 서울 중계 함수
 - `vercel.json`: Vercel 서울 리전과 함수 실행 설정
 - `tests/test_dart_kam_mvp.py`: 주요 기능과 보안 테스트
@@ -57,10 +57,12 @@ python -m venv .venv
 Copy-Item .env.example .env
 ```
 
-`.env` 파일을 열어 본인의 OpenDART 인증키를 입력합니다.
+`.env` 파일을 열어 본인의 OpenDART 인증키와 Google AI Studio에서 발급받은 Gemini API 키를 입력합니다.
 
 ```dotenv
 DART_API_KEY=발급받은_인증키
+GEMINI_API_KEY=발급받은_Gemini_API_키
+GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
 그 다음 앱을 실행합니다.
@@ -81,12 +83,16 @@ DART_API_KEY=발급받은_인증키
 - 실행 파일: `src/forcpa/dart/app.py`
 - Python: `3.11`
 
-Streamlit의 **App settings → Secrets**에는 중계 주소와 중계 토큰만 저장합니다.
+Streamlit의 **App settings → Secrets**에는 중계 주소, 중계 토큰, Gemini API 키를 저장합니다.
 
 ```toml
 DART_PROXY_URL = "https://for-cpa-inky.vercel.app/api/dart_proxy"
 DART_PROXY_TOKEN = "Vercel에 등록한 것과 같은 임의 문자열"
+GEMINI_API_KEY = "Google AI Studio에서 발급받은 키"
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 ```
+
+기본 모델은 무료 등급을 지원하는 `gemini-3.1-flash-lite`입니다. 무료 등급의 실제 호출 한도는 Google AI Studio 프로젝트별로 달라질 수 있습니다. AI 설명을 만들 때는 공개된 KAM 제목·선정 이유·감사 대응 문구만 Google Gemini API로 전송하며, API 키는 사용자 브라우저에 노출하지 않습니다. Google 정책상 무료 등급의 입력과 출력은 제품 개선에 사용될 수 있습니다.
 
 ### Vercel 서울 중계 서버
 
@@ -107,6 +113,7 @@ DART_PROXY_TOKEN=직접 생성한 긴 임의 문자열
 ## 캐시와 데이터 저장
 
 - 조회 결과는 DART 접수번호별 JSON 캐시로 저장합니다.
+- AI 설명은 접수번호·모델·프롬프트 버전·추출 내용 기준으로 별도 저장해 같은 공시에 대한 Gemini 호출을 반복하지 않습니다.
 - 같은 접수번호를 다시 조회하면 저장된 분석 결과를 재사용합니다.
 - 조회할 때마다 최신 사업보고서 접수번호는 DART에서 다시 확인합니다.
 - Streamlit Community Cloud의 로컬 파일은 재부팅이나 재배포 때 사라질 수 있습니다.

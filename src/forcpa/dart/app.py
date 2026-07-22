@@ -32,6 +32,14 @@ except ImportError:  # requirements 설치 전에도 설정 오류 화면은 표
 
 
 from forcpa.dart.api_client import DartApiError, DartClient
+from forcpa.dart.ai_summary import (
+    DEFAULT_GEMINI_MODEL,
+    AiSummaryCache,
+    GeminiKamSummarizer,
+    GeminiSummaryError,
+    KamExplanation,
+    KamExplanationService,
+)
 from forcpa.dart.cache import ResultCache
 from forcpa.dart.corp_codes import CompanyDirectory
 from forcpa.dart.document_parser import DartDocumentParser
@@ -54,6 +62,14 @@ def build_service(api_key: str, proxy_url: str = "", proxy_token: str = "") -> K
     )
 
 
+@st.cache_resource(show_spinner=False)
+def build_explanation_service(api_key: str, model: str) -> KamExplanationService:
+    return KamExplanationService(
+        GeminiKamSummarizer(api_key, model=model),
+        AiSummaryCache(CACHE_ROOT / "ai_summaries"),
+    )
+
+
 def _api_error_message(error: DartApiError) -> str:
     actions = {
         "010": "DART_API_KEY가 올바른지 확인해 주세요.",
@@ -65,7 +81,32 @@ def _api_error_message(error: DartApiError) -> str:
     return actions.get(error.code, f"OpenDART 요청에 실패했습니다. 오류 코드: {error.code}")
 
 
-def _render_result(result: KamResult) -> None:
+def _render_explanation(explanation: KamExplanation) -> None:
+    st.markdown("#### 한눈에 보기")
+    st.write(explanation.summary)
+
+    why_column, audit_column = st.columns(2)
+    with why_column:
+        st.markdown("#### 왜 중요한가요?")
+        st.write(explanation.why_it_matters)
+    with audit_column:
+        st.markdown("#### 감사인은 무엇을 했나요?")
+        st.write(explanation.audit_approach)
+
+    if explanation.key_terms:
+        st.markdown("#### 어려운 용어")
+        for term in explanation.key_terms:
+            st.markdown(f"- **{term.term}**: {term.meaning}")
+
+
+def _render_result(
+    result: KamResult,
+    *,
+    explanations: dict[int, KamExplanation] | None = None,
+    explanation_error: str = "",
+    gemini_model: str = "",
+) -> None:
+    explanations = explanations or {}
     if result.status == ResultStatus.SUCCESS:
         st.success(f"핵심감사사항 {len(result.kam_items)}건을 찾았습니다.")
     elif result.status == ResultStatus.KAM_NOT_PRESENT:
@@ -101,18 +142,22 @@ def _render_result(result: KamResult) -> None:
 
     if result.kam_items:
         st.subheader("핵심감사사항")
+        if explanation_error:
+            st.info(explanation_error)
         for item in result.kam_items:
             with st.expander(f"{item.kam_no}. {item.kam_title}", expanded=item.kam_no == 1):
-                if item.why_kam:
-                    st.markdown("#### 핵심감사사항으로 선정한 이유")
-                    st.text(item.why_kam)
-                if item.audit_response:
-                    st.markdown("#### 감사인의 대응")
-                    st.text(item.audit_response)
-                with st.expander("추출된 전체 원문"):
+                explanation = explanations.get(item.kam_no)
+                if explanation is not None:
+                    _render_explanation(explanation)
+                with st.expander("원문 보기"):
                     st.text(item.raw_text)
                 if item.source_locator:
                     st.caption(f"원문 위치: {item.source_locator}")
+        if explanations:
+            st.caption(
+                f"{gemini_model}이 공개 공시 내용을 초보자용으로 풀어쓴 설명입니다. "
+                "정확한 문구가 필요할 때만 원문 보기를 이용하세요."
+            )
 
 
 def main() -> None:
@@ -120,11 +165,13 @@ def main() -> None:
     load_dotenv(PROJECT_ROOT / ".env")
 
     st.title("DART 핵심감사사항 조회")
-    st.caption("최신 사업보고서의 감사인과 핵심감사사항 원문을 확인합니다.")
+    st.caption("최신 사업보고서의 핵심감사사항을 찾고, 어려운 감사 문구를 쉬운 말로 설명합니다.")
 
     api_key = os.getenv("DART_API_KEY", "").strip()
     proxy_url = os.getenv("DART_PROXY_URL", "").strip()
     proxy_token = os.getenv("DART_PROXY_TOKEN", "").strip()
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    gemini_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
     proxy_configured = bool(proxy_url and proxy_token)
     if bool(proxy_url) != bool(proxy_token):
         st.error("DART_PROXY_URL과 DART_PROXY_TOKEN을 함께 설정해 주세요.")
@@ -192,8 +239,29 @@ def main() -> None:
 
     result = st.session_state.get("kam_result")
     if result is not None:
+        explanations: dict[int, KamExplanation] = {}
+        explanation_error = ""
+        if result.kam_items and gemini_api_key:
+            try:
+                with st.spinner("핵심감사사항을 쉬운 말로 바꾸고 있습니다..."):
+                    explanations = build_explanation_service(
+                        gemini_api_key,
+                        gemini_model,
+                    ).explain(result)
+            except (GeminiSummaryError, OSError, ValueError) as error:
+                explanation_error = f"AI 쉬운 설명을 불러오지 못했습니다: {error}"
+        elif result.kam_items:
+            explanation_error = (
+                "AI 쉬운 설명이 아직 설정되지 않았습니다. "
+                "앱 관리자가 GEMINI_API_KEY를 설정하면 자동으로 표시됩니다."
+            )
         st.divider()
-        _render_result(result)
+        _render_result(
+            result,
+            explanations=explanations,
+            explanation_error=explanation_error,
+            gemini_model=gemini_model,
+        )
 
 
 if __name__ == "__main__":
