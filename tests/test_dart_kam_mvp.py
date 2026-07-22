@@ -33,7 +33,7 @@ from forcpa.dart.document_parser import DartDocumentParser
 from forcpa.dart.filings import find_latest_annual_report
 from forcpa.dart.models import Company, Filing, KamItem, KamResult, ResultStatus
 from forcpa.dart.service import KamService
-from forcpa.dart.viewer import DartViewer
+from forcpa.dart.viewer import AuditAttachmentNotFound, DartViewer
 
 
 FIXTURE = ROOT / "tests" / "fixtures" / "dart_kam" / "sample_connected_audit_report.xml"
@@ -301,6 +301,88 @@ class ViewerSelectionTests(unittest.TestCase):
         self.assertIn("dcmNo=200", source.source_url)
         self.assertIn("eleId=2", source.source_locator)
 
+    def test_uses_original_attachment_receipt_number_for_amended_filing(self) -> None:
+        class AmendedFilingClient(FakeClient):
+            def __init__(self) -> None:
+                super().__init__(PROSE_FIXTURE.read_bytes())
+                self.viewer_requests: list[tuple[str, str]] = []
+
+            def get_filing_viewer(self, rcept_no: str, dcm_no: str = "") -> bytes:
+                self.viewer_requests.append((rcept_no, dcm_no))
+                if not dcm_no:
+                    return """<html><body><select id='att'>
+                    <option value='rcpNo=20260311004614&amp;dcmNo=11111700'>
+                      2026.03.11 감사보고서
+                    </option>
+                    <option value='rcpNo=20260311004614&amp;dcmNo=11111701'>
+                      2026.03.11 연결감사보고서
+                    </option>
+                    </select></body></html>""".encode("utf-8")
+                return f"""<html><body><script>
+                var node1 = {{}};
+                node1['text'] = "연결재무제표에 대한 독립된 감사인의 감사보고서";
+                node1['rcpNo'] = "{rcept_no}";
+                node1['dcmNo'] = "{dcm_no}";
+                node1['eleId'] = "2";
+                node1['offset'] = "100";
+                node1['length'] = "5000";
+                node1['dtd'] = "dart4.xsd";
+                </script></body></html>""".encode("utf-8")
+
+        client = AmendedFilingClient()
+        source = DartViewer(client).load_audit_report("20260331004244")
+
+        self.assertEqual(
+            client.viewer_requests,
+            [("20260331004244", ""), ("20260311004614", "11111701")],
+        )
+        self.assertIn("rcpNo=20260311004614", source.source_url)
+        self.assertIn("dcmNo=11111701", source.source_url)
+
+    def test_falls_back_to_separate_report_when_connected_toc_is_missing(self) -> None:
+        class FallbackClient(FakeClient):
+            def __init__(self) -> None:
+                super().__init__(PROSE_FIXTURE.read_bytes())
+                self.viewer_requests: list[tuple[str, str]] = []
+
+            def get_filing_viewer(self, rcept_no: str, dcm_no: str = "") -> bytes:
+                self.viewer_requests.append((rcept_no, dcm_no))
+                if not dcm_no:
+                    return """<html><body><select id='att'>
+                    <option value='rcpNo=20250311000123&amp;dcmNo=100'>
+                      2025.03.11 감사보고서
+                    </option>
+                    <option value='rcpNo=20250311000123&amp;dcmNo=200'>
+                      2025.03.11 연결감사보고서
+                    </option>
+                    </select></body></html>""".encode("utf-8")
+                if dcm_no == "200":
+                    return b"<html><body><script>var noAuditToc = true;</script></body></html>"
+                return """<html><body><script>
+                var node1 = {};
+                node1['text'] = "독립된 감사인의 감사보고서";
+                node1['rcpNo'] = "20250311000123";
+                node1['dcmNo'] = "100";
+                node1['eleId'] = "2";
+                node1['offset'] = "100";
+                node1['length'] = "5000";
+                node1['dtd'] = "dart4.xsd";
+                </script></body></html>""".encode("utf-8")
+
+        client = FallbackClient()
+        source = DartViewer(client).load_audit_report("20250311000123")
+
+        self.assertEqual(source.dcm_no, "100")
+        self.assertEqual(source.report_scope, "separate")
+        self.assertEqual(
+            client.viewer_requests,
+            [
+                ("20250311000123", ""),
+                ("20250311000123", "200"),
+                ("20250311000123", "100"),
+            ],
+        )
+
 
 class CacheAndServiceTests(unittest.TestCase):
     def test_second_lookup_reuses_receipt_number_cache(self) -> None:
@@ -326,6 +408,39 @@ class CacheAndServiceTests(unittest.TestCase):
         self.assertTrue(second.from_cache)
         self.assertEqual(client.download_count, 1)
         self.assertEqual(first.to_dict(), second.to_dict())
+
+    def test_audit_report_lookup_failure_is_not_cached(self) -> None:
+        class FailingViewer:
+            call_count = 0
+
+            def load_audit_report(self, rcept_no: str):
+                self.call_count += 1
+                raise AuditAttachmentNotFound("감사보고서 목차를 찾지 못했습니다.")
+
+        client = FakeClient()
+        company = Company("00123456", "ABC회사", "123456")
+        viewer = FailingViewer()
+
+        class FixedDirectory:
+            def search(self, query: str, force_refresh: bool = False):
+                return [company]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            service = KamService(
+                client=client,
+                company_directory=FixedDirectory(),
+                cache=ResultCache(Path(temporary)),
+                parser=DartDocumentParser(),
+                viewer=viewer,
+            )
+            first = service.get_latest_kam(company)
+            second = service.get_latest_kam(company)
+
+        self.assertEqual(first.status, ResultStatus.AUDIT_REPORT_NOT_IDENTIFIED)
+        self.assertEqual(second.status, ResultStatus.AUDIT_REPORT_NOT_IDENTIFIED)
+        self.assertFalse(first.from_cache)
+        self.assertFalse(second.from_cache)
+        self.assertEqual(viewer.call_count, 2)
 
 
 class GeminiSummaryTests(unittest.TestCase):

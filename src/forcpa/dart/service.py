@@ -117,5 +117,11 @@ class KamService:
                 extracted_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                 warnings=[str(exc)],
             )
-        self.cache.save(result)
+        # 네트워크·뷰어 구조 문제로 생긴 실패는 다음 조회에서 다시 시도할 수 있어야 한다.
+        if result.status in {
+            ResultStatus.SUCCESS,
+            ResultStatus.KAM_NOT_PRESENT,
+            ResultStatus.MANUAL_REVIEW_REQUIRED,
+        }:
+            self.cache.save(result)
         return result

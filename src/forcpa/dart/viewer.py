@@ -29,6 +29,7 @@ class AuditReportSource:
 @dataclass(frozen=True, slots=True)
 class _Attachment:
     name: str
+    rcept_no: str
     dcm_no: str
     report_scope: str
     score: int
@@ -45,7 +46,7 @@ class DartViewer:
         self.client = client
 
     @staticmethod
-    def _select_attachment(page: bytes) -> _Attachment:
+    def _select_attachments(page: bytes) -> list[_Attachment]:
         try:
             root = lxml_html.fromstring(_decode(page))
         except (ValueError, TypeError) as exc:
@@ -55,6 +56,7 @@ class DartViewer:
         for option in root.xpath("//select[@id='att']/option"):
             value = option.get("value") or ""
             query = parse_qs(value)
+            rcept_no = (query.get("rcpNo") or [""])[0]
             dcm_no = (query.get("dcmNo") or [""])[0]
             if not dcm_no:
                 continue
@@ -63,19 +65,26 @@ class DartViewer:
             compact_name = _compact(name)
 
             if compact_name == "연결감사보고서":
-                candidates.append(_Attachment("연결감사보고서", dcm_no, "consolidated", 100))
+                candidates.append(
+                    _Attachment("연결감사보고서", rcept_no, dcm_no, "consolidated", 100)
+                )
             elif compact_name == "감사보고서":
-                candidates.append(_Attachment("감사보고서", dcm_no, "separate", 80))
+                candidates.append(_Attachment("감사보고서", rcept_no, dcm_no, "separate", 80))
             elif "연결감사보고서" in compact_name and "내부회계" not in compact_name:
-                candidates.append(_Attachment(name, dcm_no, "consolidated", 90))
+                candidates.append(_Attachment(name, rcept_no, dcm_no, "consolidated", 90))
             elif compact_name.endswith("감사보고서") and not any(
                 excluded in compact_name for excluded in ("감사의감사보고서", "내부회계", "감사위원회")
             ):
-                candidates.append(_Attachment(name, dcm_no, "separate", 60))
+                candidates.append(_Attachment(name, rcept_no, dcm_no, "separate", 60))
 
         if not candidates:
             raise AuditAttachmentNotFound("DART 첨부 목록에서 감사보고서를 찾지 못했습니다.")
-        return max(candidates, key=lambda item: item.score)
+        return sorted(candidates, key=lambda item: item.score, reverse=True)
+
+    @staticmethod
+    def _select_attachment(page: bytes) -> _Attachment:
+        """기존 호출부를 위해 가장 우선순위가 높은 첨부를 반환한다."""
+        return DartViewer._select_attachments(page)[0]
 
     @staticmethod
     def _select_audit_section(page: bytes) -> dict[str, str]:
@@ -107,22 +116,42 @@ class DartViewer:
 
     def load_audit_report(self, rcept_no: str) -> AuditReportSource:
         filing_page = self.client.get_filing_viewer(rcept_no)
-        attachment = self._select_attachment(filing_page)
-        attachment_page = self.client.get_filing_viewer(rcept_no, attachment.dcm_no)
-        section_params = self._select_audit_section(attachment_page)
-        report_html = self.client.get_report_viewer(section_params)
-        source_url = (
-            f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-            f"&dcmNo={attachment.dcm_no}"
-        )
-        return AuditReportSource(
-            attachment_name=attachment.name,
-            dcm_no=attachment.dcm_no,
-            report_scope=attachment.report_scope,
-            html=report_html,
-            source_url=source_url,
-            source_locator=(
-                f"{attachment.name} (dcmNo={attachment.dcm_no}) / "
-                f"독립된 감사인의 감사보고서 (eleId={section_params['eleId']})"
-            ),
-        )
+        attachments = self._select_attachments(filing_page)
+        failures: list[str] = []
+
+        for attachment in attachments:
+            # 정정 사업보고서의 첨부는 원공시 접수번호를 가리킬 수 있다.
+            attachment_rcept_no = attachment.rcept_no or rcept_no
+            try:
+                attachment_page = self.client.get_filing_viewer(
+                    attachment_rcept_no,
+                    attachment.dcm_no,
+                )
+                section_params = self._select_audit_section(attachment_page)
+            except AuditAttachmentNotFound as exc:
+                failures.append(f"{attachment.name}: {exc}")
+                continue
+
+            report_html = self.client.get_report_viewer(section_params)
+            source_url = (
+                "https://dart.fss.or.kr/dsaf001/main.do"
+                f"?rcpNo={attachment_rcept_no}&dcmNo={attachment.dcm_no}"
+            )
+            return AuditReportSource(
+                attachment_name=attachment.name,
+                dcm_no=attachment.dcm_no,
+                report_scope=attachment.report_scope,
+                html=report_html,
+                source_url=source_url,
+                source_locator=(
+                    f"{attachment.name} (rcpNo={attachment_rcept_no}, "
+                    f"dcmNo={attachment.dcm_no}) / "
+                    f"독립된 감사인의 감사보고서 (eleId={section_params['eleId']})"
+                ),
+            )
+
+        detail = "; ".join(failures)
+        message = "연결 및 별도 감사보고서에서 감사보고서 본문 목차를 찾지 못했습니다."
+        if detail:
+            message = f"{message} ({detail})"
+        raise AuditAttachmentNotFound(message)

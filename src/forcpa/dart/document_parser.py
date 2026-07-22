@@ -15,7 +15,7 @@ from lxml import html as lxml_html
 from .models import Company, Filing, KamItem, KamResult, ResultStatus
 
 
-PARSER_VERSION = "1.1.0"
+PARSER_VERSION = "1.2.0"
 MAX_MEMBER_SIZE = 50 * 1024 * 1024
 MAX_TOTAL_SIZE = 150 * 1024 * 1024
 
